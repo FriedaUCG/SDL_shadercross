@@ -6,7 +6,7 @@ cmake_minimum_required(VERSION 3.22...4.0)
 set(MAJOR_VERSION 3)
 set(MINOR_VERSION 0)
 set(MICRO_VERSION 0)
-set(SDL_REQUIRED_VERSION "3.1.3")
+set(SDL_REQUIRED_VERSION "3.5.0")
 
 # option() honors normal variables.
 set(CMAKE_POLICY_DEFAULT_CMP0077 NEW)
@@ -18,6 +18,7 @@ set(SHADERCROSS_MAINPROJECT ${SDL3_shadercross_IS_TOP_LEVEL})
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 include(CMakeDependentOption)
+include(CheckCSourceCompiles)
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/GetGitRevisionDescription.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/PrivateSdlFunctions.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdlcpu.cmake")
@@ -26,6 +27,41 @@ include("${CMAKE_CURRENT_LIST_DIR}/cmake/sdlmanpages.cmake")
 
 if(NOT (TARGET SDL3::Headers AND TARGET SDL3::SDL3 AND (TARGET SDL3::SDL3-static OR TARGET SDL3::SDL3-shared)))
 	find_package(SDL3 ${SDL_REQUIRED_VERSION})
+endif()
+if(NOT TARGET SDL3::Headers)
+	message(FATAL_ERROR "SDL_shadercross requires SDL3 headers from SDL ${SDL_REQUIRED_VERSION} or newer")
+endif()
+
+set(SDL_shadercross_saved_CMAKE_REQUIRED_LIBRARIES "${CMAKE_REQUIRED_LIBRARIES}")
+set(CMAKE_REQUIRED_LIBRARIES SDL3::Headers)
+check_c_source_compiles("
+#include <SDL3/SDL_gpu.h>
+int main(void)
+{
+    SDL_GPUSampledTextureSlotDescription sampled_texture_slot;
+    SDL_GPUStorageTextureSlotDescription storage_texture_slot;
+    SDL_GPUShaderResourceLayout shader_layout;
+    SDL_GPUComputePipelineResourceLayout compute_layout;
+    SDL_zero(shader_layout);
+    SDL_zero(compute_layout);
+    shader_layout.sampled_texture_slots = &sampled_texture_slot;
+    shader_layout.storage_texture_slots = &storage_texture_slot;
+    compute_layout.sampled_texture_slots = &sampled_texture_slot;
+    compute_layout.readonly_storage_texture_slots = &storage_texture_slot;
+    compute_layout.readwrite_storage_texture_slots = &storage_texture_slot;
+    (void)sizeof(&SDL_CreateGPUShaderWithResourceLayout);
+    (void)sizeof(&SDL_CreateGPUComputePipelineWithResourceLayout);
+    (void)sampled_texture_slot;
+    (void)storage_texture_slot;
+    (void)shader_layout;
+    (void)compute_layout;
+    return 0;
+}
+" SDL_SHADERCROSS_HAVE_SDL_GPU_RESOURCE_LAYOUT_FACTS)
+set(CMAKE_REQUIRED_LIBRARIES "${SDL_shadercross_saved_CMAKE_REQUIRED_LIBRARIES}")
+unset(SDL_shadercross_saved_CMAKE_REQUIRED_LIBRARIES)
+if(NOT SDL_SHADERCROSS_HAVE_SDL_GPU_RESOURCE_LAYOUT_FACTS)
+	message(FATAL_ERROR "SDL_shadercross requires SDL_gpu.h shader resource layout fact fields and creation entry points")
 endif()
 
 if(TARGET SDL3::SDL3-shared)
@@ -38,6 +74,8 @@ endif()
 
 # Options
 option(SDLSHADERCROSS_DXC "Enable HLSL compilation via DXC" ON)
+set(SDLSHADERCROSS_DXC_PROVIDER "auto" CACHE STRING "DXC provider when HLSL compilation via DXC is enabled: auto, source, or package")
+set_property(CACHE SDLSHADERCROSS_DXC_PROVIDER PROPERTY STRINGS auto source package)
 option(SDLSHADERCROSS_SHARED "Build shared SDL_shadercross library" ${SDLSHADERCROSS_SHARED_DEFAULT})
 option(SDLSHADERCROSS_STATIC "Build static SDL_shadercross library" ${SDLSHADERCROSS_STATIC_DEFAULT})
 option(SDLSHADERCROSS_SPIRVCROSS_SHARED "Link to shared library variants of dependencies" ON)
@@ -45,6 +83,8 @@ option(SDLSHADERCROSS_VENDORED "Use vendored dependencies" OFF)
 option(SDLSHADERCROSS_CLI "Build command line executable" ON)
 cmake_dependent_option(SDLSHADERCROSS_CLI_STATIC "Link CLI with static libraries" OFF "SDLSHADERCROSS_CLI;SDLSHADERCROSS_STATIC;TARGET SDL3::SDL3-static" OFF)
 cmake_dependent_option(SDLSHADERCROSS_CLI_LEAKCHECK "Check shadercross for memory leaks" OFF "SDLSHADERCROSS_CLI;TARGET SDL3::SDL3_test" OFF)
+set(SDLSHADERCROSS_TINT_EXECUTABLE "" CACHE FILEPATH "Tint executable used by optional WGSL CLI output tests")
+option(SDLSHADERCROSS_BUNDLED_TINT "Build and prefer a pinned Tint helper executable for WGSL output" OFF)
 option(SDLSHADERCROSS_WERROR "Enable Werror" OFF)
 option(SDLSHADERCROSS_INSTALL "Enable installation" ${SHADERCROSS_MAINPROJECT})
 cmake_dependent_option(SDLSHADERCROSS_INSTALL_CPACK "Enable CPack installation" ${SHADERCROSS_MAINPROJECT} "SDLSHADERCROSS_INSTALL" OFF)
@@ -66,10 +106,56 @@ if(NOT SDLSHADERCROSS_SHARED AND NOT SDLSHADERCROSS_STATIC)
 	message(FATAL_ERROR "SDLSHADERCROSS_SHARED and SDLSHADERCROSS_STATIC cannot be both disabled")
 endif()
 
+string(TOLOWER "${SDLSHADERCROSS_DXC_PROVIDER}" SDLSHADERCROSS_DXC_PROVIDER_NORMALIZED)
+if(NOT SDLSHADERCROSS_DXC_PROVIDER_NORMALIZED MATCHES "^(auto|source|package)$")
+	message(FATAL_ERROR "SDLSHADERCROSS_DXC_PROVIDER must be auto, source, or package")
+endif()
+if(NOT SDLSHADERCROSS_DXC_PROVIDER STREQUAL SDLSHADERCROSS_DXC_PROVIDER_NORMALIZED)
+	set(SDLSHADERCROSS_DXC_PROVIDER "${SDLSHADERCROSS_DXC_PROVIDER_NORMALIZED}" CACHE STRING "DXC provider when HLSL compilation via DXC is enabled: auto, source, or package" FORCE)
+endif()
+
+set(SDLSHADERCROSS_DXC_PROVIDER_RESOLVED "none")
+if(SDLSHADERCROSS_DXC)
+	if(SDLSHADERCROSS_DXC_PROVIDER STREQUAL "auto")
+		if(SDLSHADERCROSS_VENDORED)
+			set(SDLSHADERCROSS_DXC_PROVIDER_RESOLVED "source")
+		else()
+			set(SDLSHADERCROSS_DXC_PROVIDER_RESOLVED "package")
+		endif()
+	else()
+		set(SDLSHADERCROSS_DXC_PROVIDER_RESOLVED "${SDLSHADERCROSS_DXC_PROVIDER}")
+	endif()
+	if(SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "source" AND NOT SDLSHADERCROSS_VENDORED)
+		message(FATAL_ERROR "SDLSHADERCROSS_DXC_PROVIDER=source requires SDLSHADERCROSS_VENDORED=ON")
+	endif()
+endif()
+
 # Platform Flags
 if(APPLE)
 	set(CMAKE_MACOSX_RPATH ON)
 	set(CMAKE_OSX_DEPLOYMENT_TARGET 11.0)
+endif()
+
+if(SDLSHADERCROSS_BUNDLED_TINT)
+	include("${CMAKE_CURRENT_LIST_DIR}/cmake/SDLShadercrossBundledTint.cmake")
+endif()
+
+if(SDLSHADERCROSS_TINT_EXECUTABLE)
+	if(SDLSHADERCROSS_BUNDLED_TINT AND SDLSHADERCROSS_TINT_EXECUTABLE STREQUAL SDLSHADERCROSS_BUNDLED_TINT_EXECUTABLE)
+		message(STATUS "SDL_shadercross: optional WGSL CLI tests will use the bundled Tint executable: ${SDLSHADERCROSS_TINT_EXECUTABLE}")
+	elseif(IS_ABSOLUTE "${SDLSHADERCROSS_TINT_EXECUTABLE}" AND NOT EXISTS "${SDLSHADERCROSS_TINT_EXECUTABLE}")
+		message(WARNING "SDL_shadercross: configured Tint executable does not exist: ${SDLSHADERCROSS_TINT_EXECUTABLE}")
+	else()
+		message(STATUS "SDL_shadercross: using configured Tint executable for optional WGSL CLI tests: ${SDLSHADERCROSS_TINT_EXECUTABLE}")
+	endif()
+elseif(SDLSHADERCROSS_TESTS)
+	find_package(Tint QUIET)
+	if(Tint_FOUND)
+		set(SDLSHADERCROSS_TINT_EXECUTABLE "${Tint_EXECUTABLE}" CACHE FILEPATH "Tint executable used by optional WGSL CLI output tests" FORCE)
+		message(STATUS "SDL_shadercross: found Tint executable for optional WGSL CLI tests: ${SDLSHADERCROSS_TINT_EXECUTABLE}")
+	else()
+		message(STATUS "SDL_shadercross: Tint executable not found; optional WGSL CLI tests will be skipped. WGSL CLI output can still use --tint, SDL_SHADERCROSS_TINT, or tint on PATH at runtime.")
+	endif()
 endif()
 
 if(NOT MSVC)
@@ -78,8 +164,8 @@ endif()
 
 set(spirv_static_targets spirv-cross-c spirv-cross-glsl spirv-cross-hlsl spirv-cross-msl spirv-cross-cpp spirv-cross-reflect spirv-cross-core)
 
-set(pc_requires )
 set(vendored_targets )
+set(SDLSHADERCROSS_HAS_VENDORED_TARGETS OFF)
 if(SDLSHADERCROSS_VENDORED)
 	set(SPIRV_CROSS_SKIP_INSTALL ON)
 	set(SPIRV_CROSS_CLI OFF)
@@ -99,14 +185,12 @@ if(SDLSHADERCROSS_VENDORED)
 
 	if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
 		list(APPEND vendored_targets spirv-cross-c-shared)
-		list(APPEND pc_requires "spirv-cross-c-shared")
 	else()
 		enable_language(CXX)
 		if(SDLSHADERCROSS_STATIC)
 			foreach(extra IN LISTS spirv_static_targets)
 				if(TARGET ${extra})
 					list(APPEND vendored_targets ${extra})
-					list(APPEND pc_requires "${extra}")
 				endif()
 			endforeach()
 		endif()
@@ -115,14 +199,14 @@ if(SDLSHADERCROSS_VENDORED)
 	sdl_check_project_in_subfolder(external/SPIRV-Headers SPIRV-Headers SDLSHADERCROSS_VENDORED)
 	add_subdirectory(external/SPIRV-Headers EXCLUDE_FROM_ALL)
 	sdl_check_project_in_subfolder(external/SPIRV-Tools SPIRV-Tools SDLSHADERCROSS_VENDORED)
+	set(SPIRV_SKIP_TESTS ON CACHE BOOL "Skip SPIRV-Tools dependency tests in SDL_shadercross builds" FORCE)
 	add_subdirectory(external/SPIRV-Tools EXCLUDE_FROM_ALL)
 
-	sdl_check_project_in_subfolder(external/DirectXShaderCompiler DirectXShaderCompiler SDLSHADERCROSS_VENDORED)
-	if(MINGW)
-		set(CMAKE_C_COMPILER_ARCHITECTURE_ID "${SDL_CPU_NAMES}")
-	endif()
-
-	if(SDLSHADERCROSS_DXC)
+	if(SDLSHADERCROSS_DXC AND SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "source")
+		sdl_check_project_in_subfolder(external/DirectXShaderCompiler DirectXShaderCompiler SDLSHADERCROSS_VENDORED)
+		if(MINGW)
+			set(CMAKE_C_COMPILER_ARCHITECTURE_ID "${SDL_CPU_NAMES}")
+		endif()
 		# LLVM dependencies of dxc does not support building as a shared library
 		set(BUILD_SHARED_LIBS OFF)
 		# Enabling HLSL_ENABLE_DEBUG_ITERATORS blocks DirectXShaderCompiler from adding /D_ITERATOR_DEBUG_LEVEL=0
@@ -140,7 +224,10 @@ if(SDLSHADERCROSS_VENDORED)
 		add_dependencies(dxcompiler dxildll)
 	endif()
 
-	export(TARGETS ${vendored_targets} NAMESPACE "SDL3_shadercross::" FILE "SDL3_shadercross-vendored-targets.cmake")
+	if(vendored_targets)
+		set(SDLSHADERCROSS_HAS_VENDORED_TARGETS ON)
+		export(TARGETS ${vendored_targets} NAMESPACE "SDL3_shadercross::" FILE "SDL3_shadercross-vendored-targets.cmake")
+	endif()
 else()
 	if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
 		if(NOT TARGET spirv_cross_c_shared)
@@ -158,11 +245,16 @@ else()
 			find_package(spirv_cross_c REQUIRED)
 		endif()
 	endif()
+endif()
 
-	if(SDLSHADERCROSS_DXC)
+if(SDLSHADERCROSS_DXC AND SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "package")
+	if(NOT DirectXShaderCompiler_ROOT)
+		if(APPLE)
+			message(FATAL_ERROR "SDLSHADERCROSS_DXC_PROVIDER=package requires DirectXShaderCompiler_ROOT on macOS because Microsoft does not publish prebuilt macOS DXC binaries. Use -DSDLSHADERCROSS_VENDORED=ON for the DXC source provider, provide a DirectXShaderCompiler_ROOT package, or disable DXC.")
+		endif()
 		set(DirectXShaderCompiler_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/external/DirectXShaderCompiler-binaries")
-		find_package(DirectXShaderCompiler REQUIRED)
 	endif()
+	find_package(DirectXShaderCompiler REQUIRED)
 endif()
 
 # Source lists
@@ -206,6 +298,9 @@ if(SDLSHADERCROSS_SHARED)
 
 	target_link_libraries(SDL3_shadercross-shared PRIVATE
 		SDL3::SDL3-shared
+	)
+	target_link_libraries(SDL3_shadercross-shared PUBLIC
+		SDL3::Headers
 	)
 	export(TARGETS SDL3_shadercross-shared NAMESPACE "SDL3_shadercross::" FILE "SDL3_shadercross-shared-targets.cmake")
 endif()
@@ -272,7 +367,7 @@ if(NOT TARGET SDL3_shadercross::SDL3_shadercross)
 endif()
 
 if(SDLSHADERCROSS_CLI)
-	add_executable(shadercross src/cli.c)
+	add_executable(shadercross src/cli.c src/cli_manifest.c src/cli_spirv_resource_json.c src/SDL_shadercross_layout_facts.c)
 	sdl_add_warning_options(shadercross WARNING_AS_ERROR ${SDLSHADERCROSS_WERROR})
 	sdl_target_link_options_no_undefined(shadercross)
 
@@ -290,6 +385,27 @@ if(SDLSHADERCROSS_CLI)
 		target_link_libraries(shadercross PRIVATE SDL3_shadercross::SDL3_shadercross)
 		target_link_libraries(shadercross PRIVATE SDL3::SDL3)
 	endif()
+	if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
+		target_link_libraries(shadercross PRIVATE spirv-cross-c-shared)
+	else()
+		target_link_libraries(shadercross PRIVATE spirv-cross-c)
+		set_property(TARGET shadercross PROPERTY LINKER_LANGUAGE CXX)
+	endif()
+	if(SDLSHADERCROSS_BUNDLED_TINT)
+		target_compile_definitions(shadercross PRIVATE
+			"SDL_SHADERCROSS_BUNDLED_TINT_SIBLING_NAME=\"shadercross-tint${CMAKE_EXECUTABLE_SUFFIX}\""
+			"SDL_SHADERCROSS_BUNDLED_TINT_MANIFEST_NAME=\"shadercross-tint-manifest.json\""
+		)
+		add_dependencies(shadercross SDL_shadercross_bundled_tint)
+		add_custom_command(TARGET shadercross POST_BUILD
+			COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+				"${SDLSHADERCROSS_BUNDLED_TINT_EXECUTABLE}"
+				"$<TARGET_FILE_DIR:shadercross>/shadercross-tint${CMAKE_EXECUTABLE_SUFFIX}"
+			COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+				"${SDLSHADERCROSS_BUNDLED_TINT_MANIFEST}"
+				"$<TARGET_FILE_DIR:shadercross>/shadercross-tint-manifest.json"
+		)
+	endif()
 endif()
 
 if(SDLSHADERCROSS_INSTALL)
@@ -306,6 +422,48 @@ if(SDLSHADERCROSS_INSTALL)
 	else()
 		set(SDLSHADERCROSS_INSTALL_CMAKEDIR "${SDLSHADERCROSS_INSTALL_CMAKEDIR_ROOT}/SDL3_shadercross")
 	endif()
+	if(APPLE)
+		set(SDLSHADERCROSS_INSTALL_RPATH_ORIGIN "@executable_path")
+	else()
+		set(SDLSHADERCROSS_INSTALL_RPATH_ORIGIN "\$ORIGIN")
+	endif()
+	if(SDLSHADERCROSS_CLI AND NOT SDLSHADERCROSS_CLI_STATIC)
+		file(RELATIVE_PATH bin_to_lib "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
+		set_property(TARGET shadercross PROPERTY INSTALL_RPATH "${SDLSHADERCROSS_INSTALL_RPATH_ORIGIN}/${bin_to_lib}")
+	endif()
+	if(TARGET SDL3_shadercross-shared)
+		if(APPLE)
+			set_property(TARGET SDL3_shadercross-shared APPEND PROPERTY INSTALL_RPATH "@loader_path")
+		elseif(UNIX)
+			set_property(TARGET SDL3_shadercross-shared APPEND PROPERTY INSTALL_RPATH "\$ORIGIN")
+		endif()
+	endif()
+
+	function(sdl_shadercross_install_dxc_notices dxc_notice_component)
+		file(TO_CMAKE_PATH "${DirectXShaderCompiler_ROOT}" dxc_notice_root)
+		set(dxc_notice_directories "${dxc_notice_root}")
+		if(WIN32)
+			list(APPEND dxc_notice_directories "${dxc_notice_root}/windows")
+		else()
+			list(APPEND dxc_notice_directories "${dxc_notice_root}/linux")
+		endif()
+		set(dxc_notice_files)
+		foreach(dxc_notice_directory IN LISTS dxc_notice_directories)
+			foreach(dxc_notice IN ITEMS LICENSE-MS.txt LICENSE-LLVM.txt LICENSE-MIT.txt ReleaseNotes.md)
+				if(EXISTS "${dxc_notice_directory}/${dxc_notice}")
+					list(APPEND dxc_notice_files "${dxc_notice_directory}/${dxc_notice}")
+				endif()
+			endforeach()
+		endforeach()
+		if(dxc_notice_files)
+			list(REMOVE_DUPLICATES dxc_notice_files)
+			install(
+				FILES ${dxc_notice_files}
+				DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}/DirectXShaderCompiler"
+				COMPONENT ${dxc_notice_component}
+			)
+		endif()
+	endfunction()
 
 	if(TARGET SDL3_shadercross-shared)
 		install(TARGETS SDL3_shadercross-shared EXPORT SDL3_shadercross-shared-export
@@ -347,10 +505,56 @@ if(SDLSHADERCROSS_INSTALL)
 	endif()
 	install(
 		FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/SDL3_shadercross/SDL_shadercross.h"
-		DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/SDL3_shadercross" COMPONENT DEVEL
+		DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/SDL3_shadercross" COMPONENT devel
 	)
+	if(SDLSHADERCROSS_DXC AND SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "package")
+		install(IMPORTED_RUNTIME_ARTIFACTS DirectXShaderCompiler::dxcompiler DirectXShaderCompiler::dxil
+			RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT library
+			LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}" COMPONENT library
+		)
+		sdl_shadercross_install_dxc_notices(library)
+	endif()
+	if(SDLSHADERCROSS_STATIC AND SDLSHADERCROSS_DXC AND SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "package")
+		install(
+			DIRECTORY "${DirectXShaderCompiler_INCLUDE_PATH}/"
+			DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/dxc"
+			COMPONENT devel
+			FILES_MATCHING
+				PATTERN "*.h"
+				PATTERN "*.hpp"
+		)
+		if(WIN32)
+			install(
+				FILES "${DirectXShaderCompiler_dxcompiler_LIBRARY}"
+				DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+				COMPONENT devel
+			)
+		endif()
+		sdl_shadercross_install_dxc_notices(devel)
+	endif()
 	if(SDLSHADERCROSS_CLI)
 		install(TARGETS shadercross RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+	endif()
+	if(SDLSHADERCROSS_CLI AND SDLSHADERCROSS_BUNDLED_TINT)
+		file(RELATIVE_PATH SDLSHADERCROSS_BUNDLED_TINT_INSTALL_RELATIVE_PATH
+			"${CMAKE_INSTALL_FULL_BINDIR}"
+			"${CMAKE_INSTALL_FULL_LIBEXECDIR}/SDL3_shadercross/shadercross-tint${CMAKE_EXECUTABLE_SUFFIX}"
+		)
+		target_compile_definitions(shadercross PRIVATE
+			"SDL_SHADERCROSS_BUNDLED_TINT_INSTALL_RELATIVE_PATH=\"${SDLSHADERCROSS_BUNDLED_TINT_INSTALL_RELATIVE_PATH}\""
+		)
+		install(PROGRAMS "${SDLSHADERCROSS_BUNDLED_TINT_EXECUTABLE}"
+			DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/SDL3_shadercross"
+			COMPONENT library
+		)
+		install(FILES "${SDLSHADERCROSS_BUNDLED_TINT_MANIFEST}"
+			DESTINATION "${CMAKE_INSTALL_LIBEXECDIR}/SDL3_shadercross"
+			COMPONENT library
+		)
+		install(DIRECTORY "${SDLSHADERCROSS_BUNDLED_TINT_LICENSE_DIR}/"
+			DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}/bundled-tint"
+			COMPONENT library
+		)
 	endif()
 
 	include(CMakePackageConfigHelpers)
@@ -368,7 +572,7 @@ if(SDLSHADERCROSS_INSTALL)
 		DESTINATION "${SDLSHADERCROSS_INSTALL_CMAKEDIR}"
 		COMPONENT devel
 	)
-	if(NOT SDLSHADERCROSS_VENDORED)
+	if((NOT SDLSHADERCROSS_VENDORED) OR (SDLSHADERCROSS_DXC AND SDLSHADERCROSS_DXC_PROVIDER_RESOLVED STREQUAL "package"))
 		install(
 			FILES
 				"cmake/sdlcpu.cmake"
@@ -392,14 +596,26 @@ if(SDLSHADERCROSS_INSTALL)
 	file(RELATIVE_PATH SDL_PATH_PREFIX_RELATIVE_TO_PKGCONFIG "${CMAKE_INSTALL_PREFIX}/${SDLSHADERCROSS_PKGCONFIG_INSTALLDIR}" "${CMAKE_INSTALL_PREFIX}")
 	string(REGEX REPLACE "[/]+$" "" SDL_PATH_PREFIX_RELATIVE_TO_PKGCONFIG "${SDL_PATH_PREFIX_RELATIVE_TO_PKGCONFIG}")
 	set(SDL_PKGCONFIG_PREFIX "\${pcfiledir}/${SDL_PATH_PREFIX_RELATIVE_TO_PKGCONFIG}")
+	set(PC_LIBS)
 	if(NOT SDLSHADERCROSS_VENDORED)
 		if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
 			set(PC_REQUIRES "spirv-cross-c-shared")
 		else()
 			set(PC_REQUIRES "spirv-cross-c")
 		endif()
+	elseif(SDLSHADERCROSS_STATIC)
+		if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
+			list(APPEND PC_LIBS "-lspirv-cross-c-shared")
+		else()
+			foreach(extra IN LISTS spirv_static_targets)
+				list(APPEND PC_LIBS "-l${extra}")
+			endforeach()
+		endif()
 	endif()
-	set(PC_LIBS "-ldxcompiler")
+	if(SDLSHADERCROSS_STATIC AND SDLSHADERCROSS_DXC)
+		list(APPEND PC_LIBS "-ldxcompiler")
+	endif()
+	list(JOIN PC_LIBS " " PC_LIBS)
 	configure_file(cmake/sdl3-shadercross.pc.in sdl3-shadercross.pc @ONLY)
 
 	# Always install sdl3-shadercross.pc file: libraries might be different between config modes
@@ -409,6 +625,10 @@ if(SDLSHADERCROSS_INSTALL)
 	install(FILES "LICENSE.txt"
 		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}"
 		COMPONENT library
+	)
+	install(FILES "LICENSE.txt"
+		DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/licenses/${PROJECT_NAME}"
+		COMPONENT devel
 	)
 	if(SDLSHADERCROSS_INSTALL_CPACK)
 		if(MSVC)
@@ -442,16 +662,8 @@ endif()
 
 if(SDLSHADERCROSS_INSTALL_RUNTIME)
 	set(chmod_0755 OWNER_READ OWNER_WRITE OWNER_EXECUTE GROUP_READ GROUP_EXECUTE WORLD_READ WORLD_EXECUTE)
-	if(APPLE)
-		set(rpath_origin "@executable_path")
-	else()
-		set(rpath_origin "\$ORIGIN")
-	endif()
 
 	if(NOT SDLSHADERCROSS_VENDORED)
-		if(SDLSHADERCROSS_DXC)
-			install(IMPORTED_RUNTIME_ARTIFACTS DirectXShaderCompiler::dxcompiler DirectXShaderCompiler::dxil RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-		endif()
 		if(SDLSHADERCROSS_SPIRVCROSS_SHARED)
 			install(IMPORTED_RUNTIME_ARTIFACTS spirv-cross-c-shared RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
 			if(WIN32)
@@ -470,11 +682,6 @@ if(SDLSHADERCROSS_INSTALL_RUNTIME)
 				")
 			endif()
 		endif()
-	endif()
-
-	if(TARGET shadercross)
-		file(RELATIVE_PATH bin_to_lib "${CMAKE_INSTALL_FULL_BINDIR}" "${CMAKE_INSTALL_FULL_LIBDIR}")
-		set_property(TARGET shadercross PROPERTY INSTALL_RPATH "${rpath_origin}/${bin_to_lib}")
 	endif()
 
 	# Install SDL3

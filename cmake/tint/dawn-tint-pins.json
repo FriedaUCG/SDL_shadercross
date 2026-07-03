@@ -1,0 +1,40 @@
+{
+  "dawn": {
+    "repository": "https://dawn.googlesource.com/dawn",
+    "commit": "11ab3f92ed451db8c1e1366abcddd9c202e0738d",
+    "deps_sha256": "8e83fd90cd881706b1d706678a8a501b4018d50a3f0f61b564d05098ad2d2705"
+  },
+  "upstream_fix": {
+    "gerrit_cl": "313995",
+    "change_id": "I600a57bf0af7c658bda8d37d0dd87ed98a997454",
+    "bug": "512509727"
+  },
+  "build": {
+    "target": "tint_cmd_tint_cmd",
+    "installed_tool_name": "shadercross-tint",
+    "integration": "helper-executable",
+    "dawn_fetch_dependencies": true,
+    "disabled": [
+      "Dawn backends",
+      "Dawn tests",
+      "Dawn samples",
+      "Dawn fuzzers",
+      "Dawn benchmarks",
+      "tintd",
+      "unneeded Tint writers"
+    ],
+    "enabled": [
+      "Tint command tools",
+      "SPIR-V reader",
+      "WGSL reader",
+      "WGSL writer"
+    ],
+    "prerequisites": [
+      "CMake",
+      "Git",
+      "Python 3",
+      "Go",
+      "C++20 compiler"
+    ]
+  }
+}

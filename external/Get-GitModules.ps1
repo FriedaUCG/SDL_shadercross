@@ -1,36 +1,86 @@
 <#
   .SYNOPSIS
-  Downloads the Git modules specified in ../.gitmodules
+  Initializes the pinned SDL_shadercross Git submodules.
 
   .DESCRIPTION
-  Parses and downloads the Github repositories specified in the .gitmodules file
+  Synchronizes submodule URLs and updates the bounded top-level dependency set
+  plus the nested DirectXShaderCompiler dependencies to the gitlink-pinned
+  commits. This intentionally avoids recursively initializing Dawn.
+
+  .PARAMETER WithDawn
+  Also initialize the pinned top-level Dawn checkout for the opt-in bundled
+  Tint build. You can also set SDL_SHADERCROSS_DOWNLOAD_DAWN=1.
 
   .EXAMPLE
   PS> .\Get-GitModules.ps1
-  < Downloads and parses the repositories in the .gitmodules file. >
+  < Initializes the required repositories to their pinned commits. >
+
+  .EXAMPLE
+  PS> .\Get-GitModules.ps1 -WithDawn
+  < Also initializes the pinned top-level Dawn checkout. >
 #>
 
-#------- Variables -------------------------------------------------------------
-[String] $PathRegex   = "path\s*=\s*(?<path>.*)"
-[String] $URLRegex    = "url\s*=\s*(?<url>.*)" 
-[String] $BranchRegex = "branch\s*=\s*(?<Branch>.*)"
+param(
+    [switch]$WithDawn
+)
 
 #------- Script ----------------------------------------------------------------
-foreach ($Line in Get-Content $PSScriptRoot\..\.gitmodules) {
-    if ($Line -match $PathRegex) {
-        $Match  = Select-String -InputObject $Line -Pattern $PathRegex
-        $Path   = $Match.Matches[0].Groups[1].Value
+$RepoRoot = Resolve-Path "$PSScriptRoot\.."
+$GitLongPathArgs = @("-c", "core.longpaths=true")
+$DownloadDawn = $WithDawn.IsPresent
+$DawnEnv = $env:SDL_SHADERCROSS_DOWNLOAD_DAWN
+if ((-not $DownloadDawn) -and ($null -ne $DawnEnv) -and ("" -ne $DawnEnv)) {
+    switch ($DawnEnv.ToLowerInvariant()) {
+        { $_ -in @("0", "false", "no", "off") } { $DownloadDawn = $false; break }
+        { $_ -in @("1", "true", "yes", "on") } { $DownloadDawn = $true; break }
+        default {
+            Write-Error "SDL_SHADERCROSS_DOWNLOAD_DAWN must be 0 or 1."
+            exit 2
+        }
     }
-    elseif ($Line -match $URLRegex) {
-        $Match  = Select-String -InputObject $Line -Pattern $URLRegex
-        $URL    = $Match.Matches[0].Groups[1].Value
+}
+
+Push-Location $RepoRoot
+try {
+    $TopLevelModules = @(
+        "external/SPIRV-Cross",
+        "external/SPIRV-Headers",
+        "external/SPIRV-Tools",
+        "external/DirectXShaderCompiler"
+    )
+    if ($DownloadDawn) {
+        $TopLevelModules += "external/dawn"
     }
-    elseif ($Line -match $BranchRegex) {
-        $Match  = Select-String -InputObject $Line -Pattern $BranchRegex
-        $Branch = $Match.Matches[0].Groups[1].Value
-        
-        Write-Host "git clone --filter=blob:none $URL $Path -b $Branch --recursive" `
-            -ForegroundColor Blue
-        git clone --filter=blob:none $URL $PSScriptRoot/../$Path -b $Branch --recursive
+
+    Write-Host "git -c core.longpaths=true submodule sync -- $TopLevelModules" -ForegroundColor Blue
+    git @GitLongPathArgs submodule sync -- @TopLevelModules
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    Write-Host "git -c core.longpaths=true submodule update --init --filter=blob:none -- $TopLevelModules" -ForegroundColor Blue
+    git @GitLongPathArgs submodule update --init --filter=blob:none -- @TopLevelModules
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    $DXCModules = @(
+        "external/DirectX-Headers",
+        "external/SPIRV-Headers",
+        "external/SPIRV-Tools"
+    )
+
+    Write-Host "git -c core.longpaths=true -C external/DirectXShaderCompiler submodule sync -- $DXCModules" -ForegroundColor Blue
+    git @GitLongPathArgs -C external/DirectXShaderCompiler submodule sync -- @DXCModules
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    Write-Host "git -c core.longpaths=true -C external/DirectXShaderCompiler submodule update --init --filter=blob:none -- $DXCModules" -ForegroundColor Blue
+    git @GitLongPathArgs -C external/DirectXShaderCompiler submodule update --init --filter=blob:none -- @DXCModules
+    if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+    Write-Host "SDL_shadercross dependencies are initialized."
+    if ($DownloadDawn) {
+        Write-Host "The pinned top-level Dawn checkout was initialized for the opt-in bundled Tint build. Do not initialize external/dawn recursively."
+    } else {
+        Write-Host "The opt-in bundled Tint build also requires the pinned top-level Dawn checkout. Rerun this script with -WithDawn before configuring SDLSHADERCROSS_BUNDLED_TINT."
     }
+}
+finally {
+    Pop-Location
 }

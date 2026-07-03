@@ -216,7 +216,11 @@ extern SDL_DECLSPEC void * SDLCALL SDL_ShaderCross_CompileDXILFromSPIRV(
  * \param device the SDL GPU device.
  * \param info a struct describing the shader to transpile.
  * \param resource_info a struct describing resource info of the shader. Can be obtained from SDL_ShaderCross_ReflectGraphicsSPIRV().
- * \param props a properties object filled in with extra shader metadata.
+ * \param props optional SDL_PROP_GPU_SHADER_CREATE_* properties to forward to
+ *              SDL_CreateGPUShader(). Ownership-sensitive properties are not
+ *              forwarded. Use `info->props` for SDL_shadercross options. A
+ *              debug name in `info->props` is used only when `props` does not
+ *              already contain SDL_PROP_GPU_SHADER_CREATE_NAME_STRING.
  * \returns a compiled SDL_GPUShader.
  *
  * \threadsafety It is safe to call this function from any thread.
@@ -233,7 +237,12 @@ extern SDL_DECLSPEC SDL_GPUShader * SDLCALL SDL_ShaderCross_CompileGraphicsShade
  * \param device the SDL GPU device.
  * \param info a struct describing the shader to transpile.
  * \param metadata a struct describing shader metadata. Can be obtained from SDL_ShaderCross_ReflectComputeSPIRV().
- * \param props a properties object filled in with extra shader metadata.
+ * \param props optional SDL_PROP_GPU_COMPUTEPIPELINE_CREATE_* properties to
+ *              forward to SDL_CreateGPUComputePipeline(). Ownership-sensitive
+ *              properties are not forwarded. Use `info->props` for
+ *              SDL_shadercross options. A debug name in `info->props` is used
+ *              only when `props` does not already contain
+ *              SDL_PROP_GPU_COMPUTEPIPELINE_CREATE_NAME_STRING.
  * \returns a compiled SDL_GPUComputePipeline.
  *
  * \threadsafety It is safe to call this function from any thread.
@@ -275,7 +284,12 @@ extern SDL_DECLSPEC SDL_ShaderCross_ComputePipelineMetadata * SDLCALL SDL_Shader
     SDL_PropertiesID props);
 
 /**
- * Get the supported shader formats that HLSL cross-compilation can output
+ * Get the supported shader formats that HLSL cross-compilation can output.
+ *
+ * This reports formats reachable by any supported HLSL path. In particular,
+ * DXBC can be reported when FXC is available even if DXC is not available;
+ * that no-DXC path requires
+ * SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN when compiling.
  *
  * \returns GPU shader formats supported by HLSL cross-compilation.
  *
@@ -284,7 +298,8 @@ extern SDL_DECLSPEC SDL_ShaderCross_ComputePipelineMetadata * SDLCALL SDL_Shader
 extern SDL_DECLSPEC SDL_GPUShaderFormat SDLCALL SDL_ShaderCross_GetHLSLShaderFormats(void);
 
 /**
- * Compile to DXBC bytecode from HLSL code via a SPIRV-Cross round trip.
+ * Compile to DXBC bytecode from HLSL code. By default, this uses a
+ * SPIRV-Cross round trip.
  *
  * You must SDL_free the returned buffer once you are done with it.
  *
@@ -293,7 +308,7 @@ extern SDL_DECLSPEC SDL_GPUShaderFormat SDLCALL SDL_ShaderCross_GetHLSLShaderFor
  * - `SDL_SHADERCROSS_PROP_SHADER_DEBUG_ENABLE_BOOLEAN`: allows debug info to be emitted when relevant. Should only be used with debugging tools like Renderdoc.
  * - `SDL_SHADERCROSS_PROP_SHADER_DEBUG_NAME_STRING`: a UTF-8 name to be used with the shader. Relevant for use with debugging tools like Renderdoc.
  * - `SDL_SHADERCROSS_PROP_SHADER_CULL_UNUSED_BINDINGS_BOOLEAN`: When true, indicates that the compiler should cull unused shader resources. This behavior is disabled by default.
- * - `SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN`: When true, the SPIRV roundtrip is skipped. This behavior is disabled by default. Do not use this property if your shader uses Structured Buffers.
+ * - `SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN`: When true, the SPIRV roundtrip is skipped. This behavior is disabled by default. Do not use this property if your shader uses Structured Buffers. This property is required for HLSL to DXBC compilation in builds without DXC support. When this property is used, `include_dir` and `defines` are not currently applied to the direct FXC compilation path.
  *
  * \param info a struct describing the shader to transpile.
  * \param size filled in with the bytecode buffer size.

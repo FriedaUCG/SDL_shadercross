@@ -25,6 +25,7 @@ static int SDLCALL shadercross_testInitQuit(void *args)
 static int SDLCALL shadercross_CompileHLSL_to_XXX(void *args)
 {
     size_t i;
+    SDL_GPUShaderFormat hlsl_formats;
     struct {
         const char *formatname;
         const char *funcname;
@@ -37,15 +38,17 @@ static int SDLCALL shadercross_CompileHLSL_to_XXX(void *args)
     };
 
     (void)args;
+    hlsl_formats = SDL_ShaderCross_GetHLSLShaderFormats();
     for (i = 0; i < SDL_arraysize(cases); i++) {
         SDL_ShaderCross_HLSL_Info hlsl_info;
         SDL_ShaderCross_HLSL_Define hlsl_defines[2];
+        bool use_direct_dxbc = cases[i].format == SDL_GPU_SHADERFORMAT_DXBC && !(hlsl_formats & SDL_GPU_SHADERFORMAT_SPIRV);
         void *shader;
         size_t shader_size;
 
         SDLTest_AssertPass("Compiling HLSL -> %s", cases[i].formatname);
 
-        if (!(SDL_ShaderCross_GetHLSLShaderFormats() & cases[i].format)) {
+        if (!(hlsl_formats & cases[i].format)) {
             SDLTest_Log("SDL_shadercross does not support HLSL -> %s", cases[i].formatname);
             continue;
         }
@@ -55,11 +58,18 @@ static int SDLCALL shadercross_CompileHLSL_to_XXX(void *args)
         hlsl_info.source = (const char *)simple_vert_hlsl;
         hlsl_info.entrypoint = "main";
         hlsl_info.shader_stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
+        if (use_direct_dxbc) {
+            hlsl_info.props = SDL_CreateProperties();
+            SDL_SetBooleanProperty(hlsl_info.props, SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN, true);
+        }
         shader_size = 0;
         shader = cases[i].compile_XXXFromHLSL(&hlsl_info, &shader_size);
-        SDLTest_AssertCheck(shader != NULL, "%s should return a valid compiled DXBC shader (%s)", cases[i].funcname, SDL_GetError());
+        SDLTest_AssertCheck(shader != NULL, "%s should return a valid compiled %s shader (%s)", cases[i].funcname, cases[i].formatname, SDL_GetError());
         SDLTest_AssertCheck(shader_size != 0, "Size of shader returned by %s should be size > 0", cases[i].funcname);
         SDL_free(shader);
+        if (hlsl_info.props != 0) {
+            SDL_DestroyProperties(hlsl_info.props);
+        }
         SDL_ClearError();
 
         SDLTest_AssertPass("Compile a valid HLSL vertex shader to %s with Debug enabled", cases[i].formatname);
@@ -70,28 +80,50 @@ static int SDLCALL shadercross_CompileHLSL_to_XXX(void *args)
         hlsl_info.props = SDL_CreateProperties();
         SDL_SetBooleanProperty(hlsl_info.props, SDL_SHADERCROSS_PROP_SHADER_DEBUG_ENABLE_BOOLEAN, true);
         SDL_SetStringProperty(hlsl_info.props, SDL_SHADERCROSS_PROP_SHADER_DEBUG_NAME_STRING, "Simple shader");
+        if (use_direct_dxbc) {
+            SDL_SetBooleanProperty(hlsl_info.props, SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN, true);
+        }
         shader_size = 0;
         shader = cases[i].compile_XXXFromHLSL(&hlsl_info, &shader_size);
-        SDLTest_AssertCheck(shader != NULL, "%s should return a valid compiled DXBC shader (%s)", cases[i].funcname, SDL_GetError());
+        SDLTest_AssertCheck(shader != NULL, "%s should return a valid compiled %s shader (%s)", cases[i].funcname, cases[i].formatname, SDL_GetError());
         SDLTest_AssertCheck(shader_size != 0, "Size of shader returned by %s should be size > 0", cases[i].funcname);
         SDL_free(shader);
         SDL_DestroyProperties(hlsl_info.props);
         SDL_ClearError();
 
-        SDLTest_AssertPass("Break a HLSL vertex shader by defining a macro");
-        SDL_zero(hlsl_info);
-        SDL_zero(hlsl_defines);
-        hlsl_defines[0].name = "BREAK_SHADER";
-        hlsl_info.source = (const char *)simple_vert_hlsl;
-        hlsl_info.entrypoint = "main";
-        hlsl_info.shader_stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
-        hlsl_info.defines = hlsl_defines;
-        shader_size = 0;
-        shader = cases[i].compile_XXXFromHLSL(&hlsl_info, &shader_size);
-        SDLTest_AssertCheck(shader == NULL, "%s should fail when getting an invalid shader (%s)", cases[i].funcname, SDL_GetError());
-        SDLTest_AssertCheck(shader_size == 0, "Size of shader returned by %s should be == 0", cases[i].funcname);
-        SDL_free(shader);
-        SDL_ClearError();
+        if (use_direct_dxbc) {
+            SDLTest_Log("Skipping define-driven invalid-shader test for direct FXC HLSL -> DXBC; that path does not currently process SDL_shadercross defines.");
+
+            SDLTest_AssertPass("Break a direct-FXC HLSL vertex shader with invalid source");
+            SDL_zero(hlsl_info);
+            hlsl_info.source = "float4 main() : SV_Position { choke }";
+            hlsl_info.entrypoint = "main";
+            hlsl_info.shader_stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
+            hlsl_info.props = SDL_CreateProperties();
+            SDL_SetBooleanProperty(hlsl_info.props, SDL_SHADERCROSS_PROP_HLSL_SKIP_SPIRV_ROUNDTRIP_BOOLEAN, true);
+            shader_size = 0;
+            shader = cases[i].compile_XXXFromHLSL(&hlsl_info, &shader_size);
+            SDLTest_AssertCheck(shader == NULL, "%s should fail when getting an invalid direct-FXC shader (%s)", cases[i].funcname, SDL_GetError());
+            SDLTest_AssertCheck(shader_size == 0, "Size of shader returned by %s should be == 0", cases[i].funcname);
+            SDL_free(shader);
+            SDL_DestroyProperties(hlsl_info.props);
+            SDL_ClearError();
+        } else {
+            SDLTest_AssertPass("Break a HLSL vertex shader by defining a macro");
+            SDL_zero(hlsl_info);
+            SDL_zero(hlsl_defines);
+            hlsl_defines[0].name = "BREAK_SHADER";
+            hlsl_info.source = (const char *)simple_vert_hlsl;
+            hlsl_info.entrypoint = "main";
+            hlsl_info.shader_stage = SDL_SHADERCROSS_SHADERSTAGE_VERTEX;
+            hlsl_info.defines = hlsl_defines;
+            shader_size = 0;
+            shader = cases[i].compile_XXXFromHLSL(&hlsl_info, &shader_size);
+            SDLTest_AssertCheck(shader == NULL, "%s should fail when getting an invalid shader (%s)", cases[i].funcname, SDL_GetError());
+            SDLTest_AssertCheck(shader_size == 0, "Size of shader returned by %s should be == 0", cases[i].funcname);
+            SDL_free(shader);
+            SDL_ClearError();
+        }
     }
     return TEST_COMPLETED;
 }

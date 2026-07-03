@@ -1,7 +1,12 @@
 set(required_vars)
+set(dxc_root_search_args)
+
+if(DirectXShaderCompiler_ROOT)
+    list(APPEND dxc_root_search_args PATHS "${DirectXShaderCompiler_ROOT}" NO_DEFAULT_PATH)
+endif()
 
 if(WIN32)
-    find_path(DirectXShaderCompiler_INCLUDE_PATH NAMES "dxcapi.h" PATH_SUFFIXES "inc" "windows/inc" HINTS ${DirectXShaderCompiler_ROOT})
+    find_path(DirectXShaderCompiler_INCLUDE_PATH NAMES "dxcapi.h" PATH_SUFFIXES "inc" "include" "include/dxc" "windows/inc" ${dxc_root_search_args})
     if(SDL_CPU_ARM64)
         set(extra_bin_suffix "bin/arm64" "windows/bin/arm64")
         set(extra_lib_suffix "lib/arm64" "windows/lib/arm64")
@@ -12,9 +17,9 @@ if(WIN32)
         set(extra_bin_suffix "bin/x64" "windows/bin/x64")
         set(extra_lib_suffix "lib/x64" "windows/lib/x64")
     endif()
-    find_file(DirectXShaderCompiler_dxcompiler_BINARY NAMES "dxcompiler.dll" PATH_SUFFIXES "bin" ${extra_bin_suffix} HINTS ${DirectXShaderCompiler_ROOT})
-    find_library(DirectXShaderCompiler_dxcompiler_LIBRARY NAMES "dxcompiler" "dxcompiler.lib" PATH_SUFFIXES "lib" ${extra_lib_suffix} HINTS ${DirectXShaderCompiler_ROOT})
-    find_file(DirectXShaderCompiler_dxil_BINARY NAMES "dxil.dll" PATH_SUFFIXES "bin" ${extra_bin_suffix} HINTS ${DirectXShaderCompiler_ROOT})
+    find_file(DirectXShaderCompiler_dxcompiler_BINARY NAMES "dxcompiler.dll" PATH_SUFFIXES "bin" ${extra_bin_suffix} ${dxc_root_search_args})
+    find_library(DirectXShaderCompiler_dxcompiler_LIBRARY NAMES "dxcompiler" "dxcompiler.lib" PATH_SUFFIXES "lib" ${extra_lib_suffix} ${dxc_root_search_args})
+    find_file(DirectXShaderCompiler_dxil_BINARY NAMES "dxil.dll" PATH_SUFFIXES "bin" ${extra_bin_suffix} ${dxc_root_search_args})
     set(required_vars
         DirectXShaderCompiler_INCLUDE_PATH
         DirectXShaderCompiler_dxcompiler_BINARY
@@ -22,9 +27,9 @@ if(WIN32)
         DirectXShaderCompiler_dxil_BINARY
     )
 else()
-    find_path(DirectXShaderCompiler_INCLUDE_PATH NAMES "dxcapi.h" PATH_SUFFIXES "include" "include/dxc" "linux/include" "linux/include/dxc" HINTS ${DirectXShaderCompiler_ROOT})
-    find_library(DirectXShaderCompiler_dxcompiler_LIBRARY NAMES "dxcompiler" PATH_SUFFIXES "lib" "linux/lib" HINTS ${DirectXShaderCompiler_ROOT})
-    find_library(DirectXShaderCompiler_dxil_LIBRARY NAMES "dxil" PATH_SUFFIXES "lib" "linux/lib" HINTS ${DirectXShaderCompiler_ROOT})
+    find_path(DirectXShaderCompiler_INCLUDE_PATH NAMES "dxcapi.h" PATH_SUFFIXES "include" "include/dxc" "linux/include" "linux/include/dxc" ${dxc_root_search_args})
+    find_library(DirectXShaderCompiler_dxcompiler_LIBRARY NAMES "dxcompiler" PATH_SUFFIXES "lib" "linux/lib" ${dxc_root_search_args})
+    find_library(DirectXShaderCompiler_dxil_LIBRARY NAMES "dxil" PATH_SUFFIXES "lib" "linux/lib" ${dxc_root_search_args})
     set(required_vars
         DirectXShaderCompiler_INCLUDE_PATH
         DirectXShaderCompiler_dxcompiler_LIBRARY

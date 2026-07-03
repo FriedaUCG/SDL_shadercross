@@ -1,4 +1,6 @@
 build/
+__pycache__/
+*.pyc
 /external/DirectXShaderCompiler-binaries
 dxc_linux-build
 dxc_linux-subbuild
